@@ -15,16 +15,54 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include <node.h>
+#include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <v8.h>
 #include <vector>
 
 using namespace v8;
+
+void write_response(int fd) {
+	// Clear NONBLOCK for the socket FD.
+	if (fcntl(fd, F_SETFD, O_CLOEXEC) == -1) {
+		fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
+		exit(1);
+	}
+
+	// This is what Nginx does.
+	char buf[2048];
+	time_t now = time(0);
+	struct tm gm = *gmtime(&now);
+	if (strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &gm) <= 0) {
+		fprintf(stderr, "strftime's output didn't fit in 1024 bytes\n");
+		exit(1);
+	}
+	std::ostringstream response;
+	response << "HTTP/1.0 200 OK\n" <<
+	"Date: " << buf << "\n" <<
+	"Content-Length: 23\n" <<
+	"Content-Type: text/plain; charset=utf-8\n\n" <<
+	"User function is ready\n";
+	std::string res = response.str();
+
+	while (true) {
+		int result = write(fd, res.c_str(), res.length()) != -1;
+		if (result != -1) {
+			return;
+		}
+		if (errno != EINTR) {
+			fprintf(stderr, "write failed with errno: %d\n", errno);
+			exit(1);
+		}
+	}
+}
 
 void init(Handle<Object> target) {
 	const char bin[] = "./main";
@@ -55,16 +93,30 @@ void init(Handle<Object> target) {
 
 	for (struct dirent *ent = readdir(dir); ent != NULL; ent = readdir(dir)) {
 		int fd = atoi(ent->d_name);
-		struct sockaddr_storage addr;
-		socklen_t addrlen = sizeof(addr);
-		if (getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addrlen) >= 0) {
-			// Clear CLOEXEC for the socket FD.
-			if (fcntl(fd, F_SETFD, 0) == -1) {
-				fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
-				exit(1);
-			}
-			fds.push_back(ent->d_name);
+
+		// Check if this FD is a writable socket.
+		struct stat statbuf;
+		if (fstat(fd, &statbuf) != -1 && S_ISSOCK(statbuf.st_mode)) {
+			// Should be a writable socket.
+			//
+			// write_response exits on failure.
+			write_response(fd);
 		}
+
+		int val;
+		socklen_t len = sizeof(val);
+		if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &val, &len) == -1 || !val) {
+			// Not a listening socket.
+			continue;
+		}
+
+		// Clear CLOEXEC.
+		if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
+			// This is unexpected, but it should be fine to continue on.
+			fprintf(stderr, "Setting listening FD %d to O_NONBLOCK failed.\n", fd);
+		}
+
+		fds.push_back(ent->d_name);
 	}
 
 	std::vector<const char*> args;
