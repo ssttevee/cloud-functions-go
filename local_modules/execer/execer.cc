@@ -29,13 +29,7 @@
 
 using namespace v8;
 
-void write_response(int fd) {
-	// Clear NONBLOCK for the socket FD.
-	if (fcntl(fd, F_SETFD, O_CLOEXEC) == -1) {
-		fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
-		exit(1);
-	}
-
+bool write_response(int fd) {
 	// This is what Nginx does.
 	char buf[2048];
 	time_t now = time(0);
@@ -53,13 +47,20 @@ void write_response(int fd) {
 	std::string res = response.str();
 
 	while (true) {
-		int result = write(fd, res.c_str(), res.length()) != -1;
-		if (result != -1) {
-			return;
+		int result = write(fd, res.c_str(), res.length());
+		if (result == 0) {
+			// Socket is writable, but EOF.
+			return true;
 		}
-		if (errno != EINTR) {
-			fprintf(stderr, "write failed with errno: %d\n", errno);
-			exit(1);
+		if (result != -1) {
+			fprintf(stderr, "wrote %d of %lu byte(s) to FD %d, ", result, res.length(), fd);
+			res = res.substr(result);
+			fprintf(stderr, "%lu byte(s) left\n", res.length());
+			if (res.length() == 0) {
+				return true;
+			}
+		} else if (errno != EINTR) {
+			return false;
 		}
 	}
 }
@@ -94,23 +95,24 @@ void init(Handle<Object> target) {
 	for (struct dirent *ent = readdir(dir); ent != NULL; ent = readdir(dir)) {
 		int fd = atoi(ent->d_name);
 
-		// Check if this FD is a writable socket.
-		struct stat statbuf;
-		if (fstat(fd, &statbuf) != -1 && S_ISSOCK(statbuf.st_mode)) {
-			// Should be a writable socket.
-			//
-			// write_response exits on failure.
-			write_response(fd);
-		}
-
-		int val;
-		socklen_t len = sizeof(val);
-		if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &val, &len) == -1 || !val) {
-			// Not a listening socket.
+		struct sockaddr_storage addr;
+		socklen_t addrlen = sizeof(addr);
+		if (getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addrlen) == -1) {
 			continue;
 		}
 
-		// Clear CLOEXEC.
+		// Clear NONBLOCK for the socket FD.
+		if (fcntl(fd, F_SETFD, O_CLOEXEC) == -1) {
+			fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
+			exit(1);
+		}
+
+		if (write_response(fd)) {
+			// Socket was writable, so it isn't listening.
+			continue;
+		}
+
+		// Clear CLOEXEC and reset NONBLOCK.
 		if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
 			// This is unexpected, but it should be fine to continue on.
 			fprintf(stderr, "Setting listening FD %d to O_NONBLOCK failed.\n", fd);
@@ -126,6 +128,7 @@ void init(Handle<Object> target) {
 	}
 	args.push_back(NULL);
 
+	fprintf(stderr, "execing replacement binary...\n");
 	execv(bin, const_cast<char* const*>(&args[0]));
 
 	fprintf(stderr, "execve %d\n", errno);

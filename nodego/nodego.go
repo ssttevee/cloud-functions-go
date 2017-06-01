@@ -25,15 +25,6 @@ import (
 	"sync"
 )
 
-func startServer(l net.Listener, wg *sync.WaitGroup) {
-	wg.Add(1)
-	go func() {
-		log.Println(http.Serve(l, nil))
-		l.Close()
-		wg.Done()
-	}()
-}
-
 const HTTPTrigger = "/req"
 
 // TakeOver attempts to take over all of node's sockets that were open when it
@@ -68,7 +59,14 @@ func TakeOver() {
 			log.Println("Error creating FileListener:", err)
 			continue
 		}
-		startServer(l, &wg)
+
+		log.Println("Resuming HTTP server on", l.Addr())
+		wg.Add(1)
+		go func() {
+			log.Println(http.Serve(l, nil))
+			l.Close()
+			wg.Done()
+		}()
 	}
 
 	wg.Wait()
