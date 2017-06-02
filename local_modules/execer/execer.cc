@@ -15,7 +15,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <time.h>
 #include <node.h>
 #include <sstream>
 #include <stdio.h>
@@ -23,6 +22,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <v8.h>
 #include <vector>
@@ -121,11 +121,17 @@ void init(Handle<Object> target) {
 		fds.push_back(ent->d_name);
 	}
 
+	// Convert the vector to a comma separated list.
+	std::ostringstream flag;
+	for(size_t i = 0; i < fds.size(); ++i) {
+		if(i > 0) flag << ",";
+		flag << fds[i];
+	}
+
 	std::vector<const char*> args;
 	args.push_back(bin);
-	for (size_t i = 0; i < fds.size(); ++i) {
-		args.push_back(fds[i].c_str());
-	}
+	args.push_back("--fds");
+	args.push_back(flag.str().c_str());
 	args.push_back(NULL);
 
 	fprintf(stderr, "execing replacement binary...\n");
