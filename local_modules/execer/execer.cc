@@ -47,14 +47,14 @@ bool write_response(int fd) {
 	std::string res = response.str();
 
 	while (true) {
-		int result = write(fd, res.c_str(), res.length());
+		ssize_t result = write(fd, res.c_str(), res.length());
 		if (result == 0) {
 			// Socket is writable, but EOF.
 			return true;
 		}
 		if (result != -1) {
-			fprintf(stderr, "wrote %d of %lu byte(s) to FD %d, ", result, res.length(), fd);
-			res = res.substr(result);
+			fprintf(stderr, "wrote %zd of %lu byte(s) to FD %d, ", result, res.length(), fd);
+			res = res.substr(static_cast<unsigned long>(result));
 			fprintf(stderr, "%lu byte(s) left\n", res.length());
 			if (res.length() == 0) {
 				return true;
