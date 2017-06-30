@@ -145,7 +145,7 @@ void init(Handle<Object> target) {
 	for(size_t i = 0; i < fds.size(); ++i) {
 		if(i > 0) flag << ",";
 		flag << fds[i];
-  }
+	}
 
 	std::vector<const char*> args;
 	args.push_back(bin);
