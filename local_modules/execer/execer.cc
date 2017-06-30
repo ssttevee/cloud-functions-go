@@ -15,6 +15,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include <node.h>
 #include <sstream>
 #include <stdio.h>
@@ -22,20 +23,25 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 #include <v8.h>
 #include <vector>
 
 using namespace v8;
 
+// write_response writes an HTTP 200 response containing "User function is ready" to the specified FD.
+//
+// write_response returns true if the FD was writable.
 bool write_response(int fd) {
 	// This is what Nginx does.
 	char buf[2048];
 	time_t now = time(0);
 	struct tm gm = *gmtime(&now);
-	if (strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &gm) <= 0) {
-		fprintf(stderr, "strftime's output didn't fit in 1024 bytes\n");
+
+	// For more information about the data format, see:
+	// https://tools.ietf.org/html/rfc7231#section-7.1.1.1
+	if (strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S %Z", &gm) <= 0) {
+		fprintf(stderr, "strftime's output didn't fit in %lu bytes\n", sizeof(buf));
 		exit(1);
 	}
 	std::ostringstream response;
@@ -101,9 +107,16 @@ void init(Handle<Object> target) {
 			continue;
 		}
 
-		// Clear NONBLOCK for the socket FD.
-		if (fcntl(fd, F_SETFD, O_CLOEXEC) == -1) {
-			fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
+		// Save a copy of the FD flags before changing them.
+		int saved_flags = fcntl(fd, F_GETFL);
+		if (saved_flags == -1) {
+			fprintf(stderr, "fcntl(%d, F_GETFL) %d\n", fd, errno);
+			exit(1);
+		}
+
+		// Clear NONBLOCK. This avoids polling.
+		if (fcntl(fd, F_SETFL, saved_flags & ~O_NONBLOCK) == -1) {
+			fprintf(stderr, "fcntl(%d, F_SETFL, saved_flags & ~O_NONBLOCK) %d\n", fd, errno);
 			exit(1);
 		}
 
@@ -112,21 +125,27 @@ void init(Handle<Object> target) {
 			continue;
 		}
 
-		// Clear CLOEXEC and reset NONBLOCK.
-		if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-			// This is unexpected, but it should be fine to continue on.
-			fprintf(stderr, "Setting listening FD %d to O_NONBLOCK failed.\n", fd);
+		// Reset NONBLOCK. Servers tend to work better if the FD is non-blocking. Some servers require it.
+		if (fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK) == -1) {
+			fprintf(stderr, "fcntl(%d, F_SETFL, saved_flags | O_NONBLOCK) %d\n", fd, errno);
+			exit(1);
+		}
+
+		// Clear CLOEXEC. We need to preserve listening FDs.
+		if (fcntl(fd, F_SETFD, 0) == -1) {
+			fprintf(stderr, "fcntl(%d, F_SETFD, 0) %d\n", fd, errno);
+			exit(1);
 		}
 
 		fds.push_back(ent->d_name);
 	}
-
+  
 	// Convert the vector to a comma separated list.
 	std::ostringstream flag;
 	for(size_t i = 0; i < fds.size(); ++i) {
 		if(i > 0) flag << ",";
 		flag << fds[i];
-	}
+  }
 
 	std::vector<const char*> args;
 	args.push_back(bin);
