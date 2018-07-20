@@ -39,6 +39,10 @@ func (t *JSTime) UnmarshalJSON(b []byte) (err error) {
 		return
 	}
 
+	for len(b) < 26 { // time string is missing some millisecond digits
+		b = append(b[:len(b)-2], []byte(`0Z"`)...)
+	}
+
 	t.Time, err = time.Parse(`"2006-01-02T15:04:05.000Z"`, string(b))
 	return
 }
