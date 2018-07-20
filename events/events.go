@@ -24,7 +24,7 @@ import (
 	"google.golang.org/api/pubsub/v1"
 	"google.golang.org/api/storage/v1"
 
-	"../nodego"
+	"github.com/GoogleCloudPlatform/cloud-functions-go/nodego"
 )
 
 // JSTime is a wrapper for time.Time to decode the time from Javascript.
